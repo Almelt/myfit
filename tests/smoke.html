@@ -1,0 +1,144 @@
+<!doctype html><meta charset="utf-8"><title>MyFit smoke test</title>
+<body><pre id="out">?run を付けて開くとテストを実行します（実行後は元のデータに戻します）</pre>
+<iframe id="f" style="width:400px;height:800px"></iframe>
+<script>
+// MyFit のスモークテスト。tests/run-smoke.ps1 から headless Edge で実行する。
+// 同じオリジンの localStorage を使うため、開始時に退避し終了時に復元する。
+const log = [], errors = [];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const f = document.getElementById('f');
+
+if (location.search.includes('run')) {
+  f.src = '../index.html';
+  f.onload = run;
+}
+
+async function run() {
+  const w = f.contentWindow, d = w.document, E = s => w.eval(s);
+  const backup = w.localStorage.getItem('myfit.v1');
+  w.onerror = (m, s, l) => errors.push(`${m} @${s}:${l}`);
+  w.addEventListener('unhandledrejection', e => errors.push('promise: ' + e.reason));
+  w.confirm = () => true;
+  w.prompt = (q, def) => def || 'テストルーティン';
+  const click = sel => { const el = d.querySelector(sel); if (!el) throw new Error('not found: ' + sel); el.click(); };
+  const type = (sel, v, ev = 'input') => { const el = d.querySelector(sel); if (!el) throw new Error('not found: ' + sel); el.value = v; el.dispatchEvent(new Event(ev, { bubbles: true })); };
+  const check = (name, cond, extra = '') => log.push(`${cond ? 'OK' : 'NG'}  ${name}${cond ? '' : '  ' + extra}`);
+  const data = () => E('Store.data');
+  const day = n => E(`dateStr(addDays(new Date(), ${n}))`);
+
+  try {
+    /* ---------- ワークアウト記録 ---------- */
+    E('Store.reset(); render()');
+    click('[data-action="start-empty"]'); await sleep(50);
+    click('[data-action="w-add-ex"]'); await sleep(50);
+    click('[data-action="picker-toggle"][data-id="bench_press"]');
+    click('[data-action="picker-toggle"][data-id="plank"]');
+    check('picker: 2種目選択', d.querySelector('#picker-ok').textContent.includes('2'));
+    click('#picker-ok'); await sleep(300);
+    check('picker: シートが閉じる', d.querySelector('#sheet').hidden);
+    check('workout: 種目カード2枚', d.querySelectorAll('.ex-card').length === 2);
+    const ins = d.querySelectorAll('.ex-card')[0].querySelectorAll('.set-row:not(.set-hdr) input');
+    type2(ins[0], '60'); type2(ins[1], '10');
+    d.querySelectorAll('.ex-card')[0].querySelector('.chk').click();
+    check('workout: ボリューム 600', d.querySelector('#w-vol').textContent === '600');
+    check('workout: 休憩タイマー表示', !d.querySelector('#restbar').hidden);
+    click('[data-action="w-finish"]'); await sleep(50);
+    check('finish: 詳細画面', !!d.querySelector('.d-title'));
+    check('finish: 完了セットのみ保存', data().workouts.length === 1 && data().workouts[0].exercises.length === 1);
+    click('[data-action="d-routine"]');
+    check('routine: 保存', data().routines.length === 1);
+    click('[data-action="d-repeat"]'); await sleep(50);
+    const ins2 = d.querySelectorAll('.set-row:not(.set-hdr) input');
+    check('repeat: 前回値を自動入力', ins2[0].value === '60');
+    type2(ins2[0], '70');
+    d.querySelector('.chk').click();
+    click('[data-action="w-finish"]'); await sleep(50);
+    check('repeat: 自己ベスト表示', !!d.querySelector('.pr-card'));
+    click('#back'); await sleep(300);
+    check('back: ホームへ戻る', d.querySelectorAll('.w-card').length === 2);
+
+    /* ---------- 今日のおすすめ ---------- */
+    E('Store.reset()');
+    const mk = (n, exId, sets) => ({ id: `seed${n}${exId}`, date: day(n), start: Date.now() + n * 864e5, end: Date.now() + n * 864e5 + 3600e3, title: 'seed', memo: '', exercises: [{ exId, sets }] });
+    data().workouts.push(mk(-3, 'bench_press', [1, 2, 3].map(() => ({ w: 60, r: 10, done: true }))));
+    data().workouts.push(mk(-1, 'pull_up', [{ r: 8, done: true }]));
+    E('Store.save(); render()');
+    const plan = E('todayPlan()');
+    check('plan: 自動作成', plan.type === 'auto', plan.type);
+    check('plan: 昨日の背中は除外', !plan.parts.includes('back'), plan.parts);
+    const sug = E('suggestExercise("bench_press")');
+    check('plan: 全セット10回→+2.5kg', sug.sets[0].w === 62.5 && sug.sets[0].r === 8, JSON.stringify(sug.sets[0]));
+    check('plan: 回復状況6部位', d.querySelectorAll('.rv').length === 6);
+
+    /* ---------- プロフィール・体重・目標 ---------- */
+    click('[data-action="open-settings"]'); await sleep(50);
+    type('[data-prof="age"]', '30', 'change');
+    type('[data-prof="height"]', '172', 'change');
+    type('[data-prof="goal"]', 'lose', 'change');
+    check('profile: 保存', data().profile.age === 30 && data().profile.goal === 'lose');
+    click('#back'); await sleep(300);
+    click('[data-action="weight-open"]'); await sleep(50);
+    type('#wt-w', '70');
+    click('[data-action="wt-save"]'); await sleep(300);
+    check('weight: 保存', data().body.length === 1 && data().body[0].weight === 70);
+    const t = E('targetsFor()');
+    // BMR = 700 + 1075 - 150 + 5 = 1630 → ×1.55 = 2526.5 → 減量×0.85 → 2150
+    check('targets: 計算', t && t.bmr === 1630 && t.kcal === 2150 && t.p === 140, JSON.stringify(t));
+
+    /* ---------- 食事 ---------- */
+    click('#tabbar [data-tab="meals"]'); await sleep(50);
+    click('[data-action="meal-add"][data-meal="lunch"]'); await sleep(50);
+    type('#food-q', 'とりむね');
+    check('meal: ひらがな検索', d.querySelectorAll('#food-list .food-row').length >= 1);
+    click('#food-list .food-row'); await sleep(50);
+    click('[data-action="mf-qty"][data-q="2"]');
+    click('[data-action="mf-save"]'); await sleep(300);
+    const meal = data().meals[0];
+    check('meal: 数量×2で保存', meal && meal.kcal === 210 && meal.p === 46.6, JSON.stringify(meal));
+    click('[data-action="meal-edit"]'); await sleep(50);
+    check('meal: 編集は1人前の値', d.querySelector('[data-mf="kcal"]').value === '105');
+    click('#sheet [data-action="back"]'); await sleep(300);
+
+    /* ---------- レポート ---------- */
+    click('[data-action="open-report"]'); await sleep(50);
+    check('report: アドバイス表示', !!d.querySelector('.advice li'));
+    check('report: タンパク質不足の助言', E('dailyAdvice(dateStr())').some(a => a.includes('タンパク質があと')));
+    check('report: 共有テキスト', E('reportText(dateStr())').includes('■食事'));
+    click('[data-action="plan-start"]'); await sleep(50);
+    check('report: おすすめから開始', d.querySelectorAll('.ex-card').length === 5, d.querySelectorAll('.ex-card').length);
+    click('[data-action="w-discard"]'); await sleep(300);
+    check('discard: レポートへ戻る', !!d.querySelector('.advice'));
+    click('#back'); await sleep(300);
+
+    /* ---------- 各タブ・その他 ---------- */
+    for (const tb of ['home', 'calendar', 'meals', 'stats', 'library']) {
+      click(`#tabbar [data-tab="${tb}"]`); await sleep(50);
+      check(`tab: ${tb}`, d.querySelector('#view').innerHTML.length > 100);
+    }
+    click('#tabbar [data-tab="stats"]'); await sleep(50);
+    check('stats: 体重グラフ描画', d.querySelector('#c-body')?.width > 0);
+    click('#tabbar [data-tab="library"]');
+    type('#lib-q', 'べんち');
+    check('library: ひらがな検索', d.querySelectorAll('#lib-list .ex-item').length >= 1);
+    click('#lib-list .ex-item'); await sleep(50);
+    check('library: 種目シート（picker クラスなし）', !d.querySelector('#sheet').hidden && !d.querySelector('#sheet-body').classList.contains('picker'));
+    click('#sheet [data-action="back"]'); await sleep(300);
+    click('#tabbar [data-tab="calendar"]');
+    click('[data-action="cal-add"]'); await sleep(50);
+    check('calendar: 過去日の編集画面', !!d.querySelector('.w-date'));
+    const before = data().workouts.length;
+    click('#back'); await sleep(300);
+    check('calendar: 空の記録は削除', data().workouts.length === before - 1);
+  } catch (e) {
+    errors.push('TEST: ' + e.message);
+  } finally {
+    // 元のデータに戻す
+    if (backup) w.localStorage.setItem('myfit.v1', backup); else w.localStorage.removeItem('myfit.v1');
+  }
+  const ng = log.filter(l => l.startsWith('NG')).length;
+  document.getElementById('out').textContent = log.join('\n') +
+    `\nERRORS: ${errors.join('\n') || 'none'}\nRESULT: ${ng || errors.length ? 'FAIL' : 'PASS'} (${log.length - ng}/${log.length})`;
+
+  function type2(el, v) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+}
+</script>
