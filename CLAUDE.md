@@ -53,5 +53,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-smoke.ps1
 - 次の大きなステップは **Android ネイティブ化（Capacitor 想定）**。その上で
   - アプリを閉じていても休憩終了を通知（ローカル通知。PWA では確実にできない）
   - Garmin 連携：Garmin Connect → ヘルスコネクト → アプリで歩数・睡眠・心拍・消費カロリーを読み、日次レポートに表示（Garmin 公式 API は企業向け審査制で個人利用は困難）
-- 公開は GitHub Pages を想定（PWA のインストールに HTTPS が必要）
-- git へのコミットはユーザーに頼まれたときだけ行う
+- git へのコミット・push はユーザーに頼まれたときだけ行う
+
+## 公開（GitHub Pages）
+- リポジトリ: https://github.com/Almelt/myfit （public、`main` ブランチのルートを公開）
+- 公開URL: https://almelt.github.io/myfit/ （スマホはここからインストール）
+- 更新手順: `sw.js` の `CACHE` を上げる → `tests/run-smoke.ps1` が PASS → コミット → `git push`。数分で反映される
+- `gh` は PATH に入っていない場合があるので `& "$env:ProgramFiles\GitHub CLI\gh.exe"` で呼ぶ
+- コミットの作者は非公開アドレス `258854664+Almelt@users.noreply.github.com`（個人のメールアドレスをコミットやファイルに入れない）
+- PowerShell 5.1 では `git commit -F -` にヒアドキュメントを渡せない。メッセージはファイルに書いて `-F ファイル` で渡す
